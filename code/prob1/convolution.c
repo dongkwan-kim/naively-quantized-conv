@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <time.h>
 
 
 struct Tensor {
@@ -93,12 +94,20 @@ struct Tensor conv2d(struct Tensor input, struct Tensor kernel) {
 
 int main (int argc, char* argv[]) {
 
+    clock_t start, end;
+    float elapsed_time;
+
     struct Tensor tensor_in = get_tensor(argv[1]);
     struct Tensor tensor_ke = get_tensor(argv[2]);
 
     struct Tensor tensor_ot;
 
+    start = clock();
     tensor_ot = conv2d(tensor_in, tensor_ke);
+    end = clock();
+    elapsed_time = (float) (end - start) / CLOCKS_PER_SEC;
+    printf("Elapsed time: %f \n", elapsed_time);
+
     write_tensor(tensor_in, "output_tensor.bin");
 
     free(tensor_in.vector);
