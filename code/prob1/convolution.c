@@ -6,6 +6,7 @@
 struct Tensor {
     int shape[4];
     float* vector;
+    int sz;
 };
 
 
@@ -31,14 +32,25 @@ struct Tensor get_tensor(char* file_name) {
     struct Tensor tensor;
     tensor.vector = vector;
     memcpy(tensor.shape, shape, 16);
+    tensor.sz = file_sz;
     return tensor;
 }
+
+
+void* write_tensor(struct Tensor tensor, char* file_name) {
+    FILE *fp = fopen(file_name, "wb");
+    fwrite(tensor.shape, 4, 4, fp);
+    fwrite(tensor.vector, tensor.sz - 16, 1, fp);
+    fclose(fp);
+}
+
 
 int main (int argc, char* argv[]) {
 
     struct Tensor tensor_in = get_tensor(argv[1]);
     struct Tensor tensor_ke = get_tensor(argv[2]);
 
+    // write_tensor(tensor_in, "output_tensor.bin");
     free(tensor_in.vector);
     free(tensor_ke.vector);
     return 0;
