@@ -25,7 +25,8 @@ struct Tensor get_tensor(char* file_name) {
     fread(shape, 4, 4, f);
     fread(vector, file_sz - 16, 1, f);
 
-    printf("Read file: %d of %s\n", file_sz, file_name);
+    printf("Read file: %d bytes (%d, %d, %d, %d) shape from %s\n",
+            file_sz, shape[0], shape[1], shape[2], shape[3], file_name);
 
     struct Tensor tensor;
     tensor.vector = vector;
