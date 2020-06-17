@@ -3,6 +3,9 @@
 #include <stdlib.h>
 #include <time.h>
 
+#define min(a, b) (((a) < (b)) ? (a) : (b))
+#define max(a, b) (((a) > (b)) ? (a) : (b))
+
 
 struct Tensor {
     int shape[4];
@@ -46,6 +49,28 @@ void* write_tensor(struct Tensor tensor, char* file_name) {
 }
 
 
+struct Padding {
+    int top;
+    int bottom;
+    int left;
+    int right;
+};
+
+
+struct Padding get_same_padding_in_tf(int oh, int ow, int kh, int kw) {
+    // strides: 1 (default)
+    // padding: same (default)
+    int p_vertical = max(- 1 + kh, 0);
+    int p_horizontal = max(- 1 + kw, 0);
+    struct Padding pad;
+    pad.top = p_vertical / 2;
+    pad.bottom = p_vertical - top;
+    pad.left = p_horizontal / 2;
+    pad.right = p_horizontal - left;
+    return pad;
+}
+
+
 struct Tensor conv2d(struct Tensor input, struct Tensor kernel) {
     // input.shape: (N, H, W, C=IC)
     // kernel.shape: (KH, KW, OC, IC=C)
@@ -69,12 +94,15 @@ struct Tensor conv2d(struct Tensor input, struct Tensor kernel) {
     int o1 = input.shape[2] * o2;
     int o0 = input.shape[1] * o1;
 
+    struct Padding pad = get_same_padding_in_tf(output.shape[1], output.shape[2], kernel.shape[0], kernel.shape[1]);
+
     int odx, kdx, idx;
     for (int _n = 0; _n < input.shape[0]; _n++) {  // N
         for (int _oc = 0; _oc < kernel.shape[2]; _oc++) { // OC
             for (int _ic = 0; _ic < kernel.shape[3]; _ic++) { // IC = C
                 for (int _h = 0; _h < input.shape[1]; _h++) { // H
                     for (int _w = 0; _w < input.shape[2]; _w++) { // W
+                        /* Todo: implement
                         for (int _kh = 0; _kh < kernel.shape[0]; _kh++) { // KH
                             for (int _kw = 0; _kw < kernel.shape[1]; _kw++) { // KW
                                 odx = o0 * _n + o1 * _h + o2 * _w + _oc;
@@ -83,6 +111,7 @@ struct Tensor conv2d(struct Tensor input, struct Tensor kernel) {
                                 out.vector[odx] += kernel.vector[kdx] * input.vector[idx];
                             }
                         }
+                        */
                     }
                 }
             }
