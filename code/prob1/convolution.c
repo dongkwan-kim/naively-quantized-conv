@@ -127,7 +127,7 @@ void einsum_hwi_hwoi_to_o(int* shape, float* v_hwi, float* v_hwoi, float* v_o) {
                 for (int _i = 0; _i < i; _i++) {
                     hwi_idx = (w * i) * _h + i * _w + _i;
                     hwoi_idx = (w * o * i) * _h + (o * i) * _w + i * _o + _i;
-                    v_o[_o] += v_hwi[hwi_idx] + v_hwoi[hwoi_idx];
+                    v_o[_o] += v_hwi[hwi_idx] * v_hwoi[hwoi_idx];
                 }
             }
         }
