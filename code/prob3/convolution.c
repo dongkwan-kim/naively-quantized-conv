@@ -118,7 +118,7 @@ float* get_input_patch(struct Tensor input, struct Padding pad,
 }
 
 
-void dot(int dim, float* a1d, float* b1d, float* c) {
+void dot(int dim, float* a1d, float* b1d, float* c, int quant_type) {
 
     __m256 m_sum, m_a1d, m_b1d, res;
 
@@ -150,17 +150,18 @@ struct p_mmv_args {
     float* mxk;
     float* kx1;
     float* mx1;
+    int quant_type;
 } args;
 
 
 
-void mmv(int dim_m, int dim_k, float* mxk, float* kx1, float* mx1) {
+void mmv(int dim_m, int dim_k, float* mxk, float* kx1, float* mx1, int quant_type) {
     float* row1xk = (float *) malloc(sizeof(float) * dim_k);
     int row_idx;
     for (int i = 0; i < dim_m; i ++) {
         row_idx = i * dim_k;
         memcpy(row1xk, &mxk[row_idx], dim_k * sizeof(float));
-        dot(dim_k, row1xk, kx1, &mx1[i]);
+        dot(dim_k, row1xk, kx1, &mx1[i], quant_type);
     }
     free(row1xk);
 }
@@ -169,12 +170,12 @@ void mmv(int dim_m, int dim_k, float* mxk, float* kx1, float* mx1) {
 void *p_mmv(void* arguments) {
     struct p_mmv_args *args = arguments;
     int idx = args->row_idx * args->dim_k;
-    mmv(args->dim_m, args->dim_k, &args->mxk[idx], args->kx1, &args->mx1[args->row_idx]);
+    mmv(args->dim_m, args->dim_k, &args->mxk[idx], args->kx1, &args->mx1[args->row_idx], args->quant_type);
     free(args);
 }
 
 
-void mmv_pthread(int num_thread, int dim_m, int dim_k, float* mxk, float* kx1, float* mx1) {
+void mmv_pthread(int num_thread, int dim_m, int dim_k, float* mxk, float* kx1, float* mx1, int quant_type) {
 
     pthread_t tid[num_thread];
 
@@ -186,6 +187,7 @@ void mmv_pthread(int num_thread, int dim_m, int dim_k, float* mxk, float* kx1, f
     args.kx1 = kx1;
     args.mx1 = mx1;
     args.row_idx = -1;
+    args.quant_type = quant_type;
 
     for (int t = 0; t < num_thread; t++) {
         _args = (struct p_mmv_args *) malloc(sizeof(struct p_mmv_args));
@@ -208,7 +210,7 @@ void mmv_pthread(int num_thread, int dim_m, int dim_k, float* mxk, float* kx1, f
 }
 
 
-void einsum_hwi_hwoi_to_o(int* shape, float* v_hwi, float* v_hwoi, float* v_o, int num_thread) {
+void einsum_hwi_hwoi_to_o(int* shape, float* v_hwi, float* v_hwoi, float* v_o, int num_thread, int quant_type) {
     // shape: h, w, o, i
     int h = shape[0];
     int w = shape[1];
@@ -233,17 +235,6 @@ void einsum_hwi_hwoi_to_o(int* shape, float* v_hwi, float* v_hwoi, float* v_o, i
                 }
 
             } else {
-
-                /* no pthread version:
-                for (int _o = 0; _o < o; _o++) {
-                    hwi_idx = (w * i) * _h + i * _w;
-                    hwoi_idx = (w * o * i) * _h + (o * i) * _w + i * _o;
-                    float tmp = 0;
-                    dot(i, v_hwi + hwi_idx, v_hwoi + hwoi_idx, &tmp);
-                    v_o[_o] += tmp;
-                }
-                */
-
                 hwi_idx = (w * i) * _h + i * _w;
                 hwoi_idx = (w * o * i) * _h + (o * i) * _w;
 
@@ -251,7 +242,7 @@ void einsum_hwi_hwoi_to_o(int* shape, float* v_hwi, float* v_hwoi, float* v_o, i
                 v_oi = v_hwoi + hwoi_idx;
 
                 float *tmp_o = (float *) calloc(o, sizeof(float));
-                mmv_pthread(num_thread, o, i, v_oi, v_i1, tmp_o);
+                mmv_pthread(num_thread, o, i, v_oi, v_i1, tmp_o, quant_type);
                 for (int _o = 0; _o < o; _o++) {
                     v_o[_o] += tmp_o[_o];
                 }
@@ -261,7 +252,7 @@ void einsum_hwi_hwoi_to_o(int* shape, float* v_hwi, float* v_hwoi, float* v_o, i
 }
 
 
-struct Tensor conv2d(struct Tensor input, struct Tensor kernel, int num_thread) {
+struct Tensor conv2d(struct Tensor input, struct Tensor kernel, int num_thread, int quant_type) {
     // input.shape: (N, H, W, C=IC)
     // kernel.shape: (KH, KW, OC, IC=C)
     // output.shape: (N, H, W, OC)
@@ -297,7 +288,7 @@ struct Tensor conv2d(struct Tensor input, struct Tensor kernel, int num_thread) 
                 v_o = (float *) calloc(oc, sizeof(float));
 
                 patch_hwi = get_input_patch(input, pad, _n, _h, _w, kernel.shape[0], kernel.shape[1], i0, i1, i2);
-                einsum_hwi_hwoi_to_o(kernel.shape, patch_hwi, kernel.vector, v_o, num_thread);
+                einsum_hwi_hwoi_to_o(kernel.shape, patch_hwi, kernel.vector, v_o, num_thread, quant_type);
 
                 memcpy(out.vector + start_odx, v_o, oc * sizeof(float));
 
@@ -320,9 +311,18 @@ int main (int argc, char* argv[]) {
 
     struct Tensor tensor_ot;
 
+    int quant_type;
+    if (!strcmp(argv[3], "FP32")) {
+        quant_type = 1;
+    } else if (!strcmp(argv[3], "INT32")) {
+        quant_type = 2;
+    } else if (!strcmp(argv[3], "INT16")) {
+        quant_type = 3;
+    }
+
     int num_thread = 1;
     start = clock();
-    tensor_ot = conv2d(tensor_in, tensor_ke, num_thread);
+    tensor_ot = conv2d(tensor_in, tensor_ke, num_thread, quant_type);
     end = clock();
     elapsed_time = (float) (end - start) / CLOCKS_PER_SEC;
     printf("Elapsed time w/ AVX+pthread: %f \n", elapsed_time);
