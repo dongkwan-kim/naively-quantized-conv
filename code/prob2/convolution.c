@@ -2,9 +2,33 @@
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
+#include <math.h>
 
 #define min(a, b) (((a) < (b)) ? (a) : (b))
 #define max(a, b) (((a) > (b)) ? (a) : (b))
+
+
+float get_nrmse(float* xs, float* ys, int dim) {
+    float y_max = ys[0];
+    float y_min = ys[0];
+    float x, y;
+    float accum = 0;
+    for (int i = 0; i < dim; i++) {
+        x = xs[i];
+        y = ys[i];
+
+        accum += pow(x - y, 2);
+
+        if (y >= y_max)
+            y_max = y;
+        if (y <= y_min)
+            y_min = y;
+
+    }
+    accum = accum / ((float) dim);
+    accum = sqrtf(accum) / (y_max - y_min);
+    return accum;
+}
 
 
 struct Tensor {
@@ -114,20 +138,30 @@ float* get_input_patch(struct Tensor input, struct Padding pad,
 }
 
 
-void einsum_hwi_hwoi_to_o(int* shape, float* v_hwi, float* v_hwoi, float* v_o) {
+void einsum_hwi_hwoi_to_o(int* shape, float* v_hwi, float* v_hwoi, float* v_o, int quant_byte, float quant_const) {
     // shape: h, w, o, i
     int h = shape[0];
     int w = shape[1];
     int o = shape[2];
     int i = shape[3];
     int hwi_idx, hwoi_idx;
+    float quant_const_square = quant_const * quant_const;
     for (int _h = 0; _h < h; _h++) {
         for (int _w = 0; _w < w; _w++) {
             for (int _o = 0; _o < o; _o++) {
                 for (int _i = 0; _i < i; _i++) {
                     hwi_idx = (w * i) * _h + i * _w + _i;
                     hwoi_idx = (w * o * i) * _h + (o * i) * _w + i * _o + _i;
-                    v_o[_o] += v_hwi[hwi_idx] + v_hwoi[hwoi_idx];
+
+                    if (quant_byte == 32) {
+                        v_o[_o] += (((int32_t) (v_hwi[hwi_idx] * quant_const)) * ((int32_t) (v_hwoi[hwoi_idx] * quant_const))) / quant_const_square;
+                    } else if (quant_byte == 16) {
+                        v_o[_o] += (((int16_t) (v_hwi[hwi_idx] * quant_const)) * ((int16_t) (v_hwoi[hwoi_idx] * quant_const))) / quant_const_square;
+                    } else if (quant_byte == 8) {
+                        v_o[_o] += (((int8_t) (v_hwi[hwi_idx] * quant_const)) * ((int8_t) (v_hwoi[hwoi_idx] * quant_const))) / quant_const_square;
+                    } else { // no quantization
+                        v_o[_o] += v_hwi[hwi_idx] * v_hwoi[hwoi_idx];
+                    }
                 }
             }
         }
@@ -135,7 +169,7 @@ void einsum_hwi_hwoi_to_o(int* shape, float* v_hwi, float* v_hwoi, float* v_o) {
 }
 
 
-struct Tensor conv2d(struct Tensor input, struct Tensor kernel) {
+struct Tensor conv2d(struct Tensor input, struct Tensor kernel, int quant_byte, float quant_const) {
     // input.shape: (N, H, W, C=IC)
     // kernel.shape: (KH, KW, OC, IC=C)
     // output.shape: (N, H, W, OC)
@@ -171,7 +205,7 @@ struct Tensor conv2d(struct Tensor input, struct Tensor kernel) {
                 v_o = (float *) calloc(oc, sizeof(float));
 
                 patch_hwi = get_input_patch(input, pad, _n, _h, _w, kernel.shape[0], kernel.shape[1], i0, i1, i2);
-                einsum_hwi_hwoi_to_o(kernel.shape, patch_hwi, kernel.vector, v_o);
+                einsum_hwi_hwoi_to_o(kernel.shape, patch_hwi, kernel.vector, v_o, quant_byte, quant_const);
 
                 memcpy(out.vector + start_odx, v_o, oc * sizeof(float));
 
@@ -192,15 +226,40 @@ int main (int argc, char* argv[]) {
     struct Tensor tensor_in = get_tensor(argv[1]);
     struct Tensor tensor_ke = get_tensor(argv[2]);
 
-    struct Tensor tensor_ot;
+    struct Tensor tensor_ot, tensor_quant_ot;
 
     start = clock();
-    tensor_ot = conv2d(tensor_in, tensor_ke);
+    tensor_ot = conv2d(tensor_in, tensor_ke, -1, -1);
     end = clock();
     elapsed_time = (float) (end - start) / CLOCKS_PER_SEC;
-    printf("Elapsed time: %f \n", elapsed_time);
 
-    write_tensor(tensor_in, "output_tensor.bin");
+    int quant_byte;  // 32, 16, 8
+    float quant_const;
+
+    printf("quant_byte\tquant_const\tnrmse\telapsed_time\n");
+    printf("%d\t%d\t%f\t%f\n", -1, -1, 0.0, elapsed_time);
+
+    for (int _byte = 3; _byte <= 5; _byte++) {
+
+        quant_byte = pow(2, _byte);
+
+        for (int _const = 0; _const <= 10000; _const += 200) {
+
+            quant_const = max(1, _const);
+
+            start = clock();
+            tensor_quant_ot = conv2d(tensor_in, tensor_ke, quant_byte, quant_const);
+            end = clock();
+            elapsed_time = (float) (end - start) / CLOCKS_PER_SEC;
+
+            int tensor_size = tensor_ot.shape[0] * tensor_ot.shape[1] * tensor_ot.shape[2] * tensor_ot.shape[3];
+            float nrmse = get_nrmse(tensor_quant_ot.vector, tensor_ot.vector, tensor_size);
+
+            printf("%d\t%d\t%f\t%f\n", quant_byte, (int) quant_const, nrmse, elapsed_time);
+
+            free(tensor_quant_ot.vector);
+        }
+    }
 
     free(tensor_in.vector);
     free(tensor_ke.vector);

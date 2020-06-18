@@ -1,5 +1,5 @@
 convolution: convolution.c
-	gcc convolution.c -o3 -o convolution
+	gcc convolution.c -lm -o3 -o convolution
 
 clean:
 	rm convolution
