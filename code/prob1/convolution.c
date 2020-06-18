@@ -46,6 +46,7 @@ void* write_tensor(struct Tensor tensor, char* file_name) {
     fwrite(tensor.shape, 4, 4, fp);
     fwrite(tensor.vector, tensor.sz - 16, 1, fp);
     fclose(fp);
+    printf("Write tensor: %s\n", file_name);
 }
 
 
@@ -200,7 +201,7 @@ int main (int argc, char* argv[]) {
     elapsed_time = (float) (end - start) / CLOCKS_PER_SEC;
     printf("Elapsed time: %f \n", elapsed_time);
 
-    write_tensor(tensor_in, "output_tensor.bin");
+    write_tensor(tensor_ot, "output_tensor.bin");
 
     free(tensor_in.vector);
     free(tensor_ke.vector);

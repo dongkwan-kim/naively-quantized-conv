@@ -70,6 +70,7 @@ void* write_tensor(struct Tensor tensor, char* file_name) {
     fwrite(tensor.shape, 4, 4, fp);
     fwrite(tensor.vector, tensor.sz - 16, 1, fp);
     fclose(fp);
+    printf("Write tensor: %s\n", file_name);
 }
 
 
@@ -233,31 +234,51 @@ int main (int argc, char* argv[]) {
     end = clock();
     elapsed_time = (float) (end - start) / CLOCKS_PER_SEC;
 
-    int quant_byte;  // 32, 16, 8
+    int quant_byte = (int) atoi(argv[3]);  // 32, 16, 8
     float quant_const;
 
-    printf("quant_byte\tquant_const\tnrmse\telapsed_time\n");
-    printf("%d\t%d\t%f\t%f\n", -1, -1, 0.0, elapsed_time);
+    if (quant_byte > 0) {
 
-    for (int _byte = 3; _byte <= 5; _byte++) {
+        if (quant_byte == 32) {
+            quant_const = 1000;
+        } else if (quant_byte == 16) {
+            quant_const = 1000;
+        } else if (quant_byte == 8) {
+            quant_const = 1000;
+        }
 
-        quant_byte = pow(2, _byte);
+        start = clock();
+        tensor_quant_ot = conv2d(tensor_in, tensor_ke, quant_byte, quant_const);
+        end = clock();
+        elapsed_time = (float) (end - start) / CLOCKS_PER_SEC;
+        printf("Elapsed time: %f for byte %d, const %f \n", elapsed_time, quant_byte, quant_const);
+        write_tensor(tensor_ot, "output_tensor.bin");
 
-        for (int _const = 0; _const <= 10000; _const += 200) {
+    } else {
 
-            quant_const = max(1, _const);
+        printf("quant_byte\tquant_const\tnrmse\telapsed_time\n");
+        printf("%d\t%d\t%f\t%f\n", -1, -1, 0.0, elapsed_time);
 
-            start = clock();
-            tensor_quant_ot = conv2d(tensor_in, tensor_ke, quant_byte, quant_const);
-            end = clock();
-            elapsed_time = (float) (end - start) / CLOCKS_PER_SEC;
+        for (int _byte = 3; _byte <= 5; _byte++) {
 
-            int tensor_size = tensor_ot.shape[0] * tensor_ot.shape[1] * tensor_ot.shape[2] * tensor_ot.shape[3];
-            float nrmse = get_nrmse(tensor_quant_ot.vector, tensor_ot.vector, tensor_size);
+            quant_byte = pow(2, _byte);
 
-            printf("%d\t%d\t%f\t%f\n", quant_byte, (int) quant_const, nrmse, elapsed_time);
+            for (int _const = 0; _const <= 10000; _const += 200) {
 
-            free(tensor_quant_ot.vector);
+                quant_const = max(1, _const);
+
+                start = clock();
+                tensor_quant_ot = conv2d(tensor_in, tensor_ke, quant_byte, quant_const);
+                end = clock();
+                elapsed_time = (float) (end - start) / CLOCKS_PER_SEC;
+
+                int tensor_size = tensor_ot.shape[0] * tensor_ot.shape[1] * tensor_ot.shape[2] * tensor_ot.shape[3];
+                float nrmse = get_nrmse(tensor_quant_ot.vector, tensor_ot.vector, tensor_size);
+
+                printf("%d\t%d\t%f\t%f\n", quant_byte, (int) quant_const, nrmse, elapsed_time);
+
+                free(tensor_quant_ot.vector);
+            }
         }
     }
 
