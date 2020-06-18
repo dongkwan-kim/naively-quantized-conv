@@ -34,6 +34,9 @@ float get_nrmse(float* xs, float* ys, int dim) {
 struct Tensor {
     int shape[4];
     float* vector;
+    int32_t* v32;
+    int16_t* v16;
+    int8_t* v8;
     int sz;
 };
 
@@ -61,6 +64,49 @@ struct Tensor get_tensor(char* file_name) {
     tensor.vector = vector;
     memcpy(tensor.shape, shape, 16);
     tensor.sz = file_sz;
+    return tensor;
+}
+
+struct Tensor quantize(struct Tensor t, int quant_byte, float quant_const) {
+    int dim = t.shape[0] * t.shape[1] * t.shape[2] * t.shape[3];
+    if (quant_byte == 32) {
+        int32_t* qv = (int32_t *) malloc(dim * sizeof(int32_t));
+        for (int i = 0; i < dim; i++)
+            qv[i] = (int32_t) (t.vector[i] * quant_const);
+        t.v32 = qv;
+    } else if (quant_byte == 16) {
+        int16_t* qv = (int16_t *) malloc(dim * sizeof(int16_t));
+        for (int i = 0; i < dim; i++)
+            qv[i] = (int16_t) (t.vector[i] * quant_const);
+        t.v16 = qv;
+    } else if (quant_byte == 8) {
+        int8_t* qv = (int8_t *) malloc(dim * sizeof(int8_t));
+        for (int i = 0; i < dim; i++)
+            qv[i] = (int8_t) (t.vector[i] * quant_const);
+        t.v8 = qv;
+    }
+    return t;
+}
+
+struct Tensor recover_tensor(struct Tensor tensor, int quant_byte, float quant_const) {
+
+    int dim = tensor.shape[0] * tensor.shape[1] * tensor.shape[2] * tensor.shape[3];
+    float quant_const_square = quant_const * quant_const;
+
+    float *vector = (float *) malloc(dim * sizeof(float));
+    tensor.vector = vector;
+
+    if (quant_byte == 32) {
+        for (int i = 0; i < dim; i++)
+            tensor.vector[i] = tensor.v32[i] / quant_const_square;
+    } else if (quant_byte == 16) {
+        for (int i = 0; i < dim; i++)
+            tensor.vector[i] = tensor.v16[i] / quant_const_square;
+    } else if (quant_byte == 8) {
+        for (int i = 0; i < dim; i++)
+            tensor.vector[i] = tensor.v8[i] / quant_const_square;
+    }
+    tensor.sz = dim * sizeof(float);
     return tensor;
 }
 
@@ -138,31 +184,207 @@ float* get_input_patch(struct Tensor input, struct Padding pad,
     return patch;
 }
 
+int32_t* get_input_patch_32(struct Tensor input, struct Padding pad,
+                            int _n, int _h, int _w, int kh, int kw,
+                            int i0, int i1, int i2) {
+    // input.shape: (N=1, H, W, C=IC)
+    // --> (kh, kw, ic)
+    int h = input.shape[1];
+    int w = input.shape[2];
+    int ic = input.shape[3];
+    int patch_sz = kh * kw * ic;
+    int32_t *patch = (int32_t *) calloc(patch_sz, sizeof(int32_t));
 
-void einsum_hwi_hwoi_to_o(int* shape, float* v_hwi, float* v_hwoi, float* v_o, int quant_byte, float quant_const) {
+    int center_h = kh / 2;
+    int center_w = kw / 2;
+
+    int input_base_idx = i0 * _n + i1 * (_h - center_h) + i2 * (_w - center_w);
+    int patch_base_idx = 0;
+    int size = kw * ic;
+    int end_h = kh;
+
+    if (pad.top != 0 && _h - center_h < 0) {
+        input_base_idx += i1 * pad.top;
+        patch_base_idx += kw * ic * pad.top;
+        end_h -= pad.top;
+    } else if (pad.bottom != 0 && _h - center_h + kh > h) {
+        end_h -= pad.bottom;
+    }
+    if (pad.left != 0 && _w - center_w < 0){
+        input_base_idx += i2 * pad.left;
+        patch_base_idx += ic * pad.left;
+        size -= ic * pad.left;
+    } else if (pad.right != 0 && _w - center_w + kw > w) {
+        size -= ic * pad.right;
+    }
+    int input_start_idx, patch_start_idx;
+    for (int _kh = 0; _kh < end_h; _kh++) {
+        input_start_idx = input_base_idx + i1 * _kh;
+        patch_start_idx = patch_base_idx + kw * ic * _kh;
+        memcpy(patch + patch_start_idx, input.v32 + input_start_idx, size * sizeof(int32_t));
+    }
+    return patch;
+}
+
+int16_t* get_input_patch_16(struct Tensor input, struct Padding pad,
+                            int _n, int _h, int _w, int kh, int kw,
+                            int i0, int i1, int i2) {
+    // input.shape: (N=1, H, W, C=IC)
+    // --> (kh, kw, ic)
+    int h = input.shape[1];
+    int w = input.shape[2];
+    int ic = input.shape[3];
+    int patch_sz = kh * kw * ic;
+    int16_t *patch = (int16_t *) calloc(patch_sz, sizeof(int16_t));
+
+    int center_h = kh / 2;
+    int center_w = kw / 2;
+
+    int input_base_idx = i0 * _n + i1 * (_h - center_h) + i2 * (_w - center_w);
+    int patch_base_idx = 0;
+    int size = kw * ic;
+    int end_h = kh;
+
+    if (pad.top != 0 && _h - center_h < 0) {
+        input_base_idx += i1 * pad.top;
+        patch_base_idx += kw * ic * pad.top;
+        end_h -= pad.top;
+    } else if (pad.bottom != 0 && _h - center_h + kh > h) {
+        end_h -= pad.bottom;
+    }
+    if (pad.left != 0 && _w - center_w < 0){
+        input_base_idx += i2 * pad.left;
+        patch_base_idx += ic * pad.left;
+        size -= ic * pad.left;
+    } else if (pad.right != 0 && _w - center_w + kw > w) {
+        size -= ic * pad.right;
+    }
+    int input_start_idx, patch_start_idx;
+    for (int _kh = 0; _kh < end_h; _kh++) {
+        input_start_idx = input_base_idx + i1 * _kh;
+        patch_start_idx = patch_base_idx + kw * ic * _kh;
+        memcpy(patch + patch_start_idx, input.v16 + input_start_idx, size * sizeof(int16_t));
+    }
+    return patch;
+}
+
+int8_t* get_input_patch_8(struct Tensor input, struct Padding pad,
+                          int _n, int _h, int _w, int kh, int kw,
+                          int i0, int i1, int i2) {
+    // input.shape: (N=1, H, W, C=IC)
+    // --> (kh, kw, ic)
+    int h = input.shape[1];
+    int w = input.shape[2];
+    int ic = input.shape[3];
+    int patch_sz = kh * kw * ic;
+    int8_t *patch = (int8_t *) calloc(patch_sz, sizeof(int8_t));
+
+    int center_h = kh / 2;
+    int center_w = kw / 2;
+
+    int input_base_idx = i0 * _n + i1 * (_h - center_h) + i2 * (_w - center_w);
+    int patch_base_idx = 0;
+    int size = kw * ic;
+    int end_h = kh;
+
+    if (pad.top != 0 && _h - center_h < 0) {
+        input_base_idx += i1 * pad.top;
+        patch_base_idx += kw * ic * pad.top;
+        end_h -= pad.top;
+    } else if (pad.bottom != 0 && _h - center_h + kh > h) {
+        end_h -= pad.bottom;
+    }
+    if (pad.left != 0 && _w - center_w < 0){
+        input_base_idx += i2 * pad.left;
+        patch_base_idx += ic * pad.left;
+        size -= ic * pad.left;
+    } else if (pad.right != 0 && _w - center_w + kw > w) {
+        size -= ic * pad.right;
+    }
+    int input_start_idx, patch_start_idx;
+    for (int _kh = 0; _kh < end_h; _kh++) {
+        input_start_idx = input_base_idx + i1 * _kh;
+        patch_start_idx = patch_base_idx + kw * ic * _kh;
+        memcpy(patch + patch_start_idx, input.v8 + input_start_idx, size * sizeof(int8_t));
+    }
+    return patch;
+}
+
+
+void einsum_hwi_hwoi_to_o(int* shape, float* v_hwi, float* v_hwoi, float* v_o) {
     // shape: h, w, o, i
     int h = shape[0];
     int w = shape[1];
     int o = shape[2];
     int i = shape[3];
     int hwi_idx, hwoi_idx;
-    float quant_const_square = quant_const * quant_const;
     for (int _h = 0; _h < h; _h++) {
         for (int _w = 0; _w < w; _w++) {
             for (int _o = 0; _o < o; _o++) {
                 for (int _i = 0; _i < i; _i++) {
                     hwi_idx = (w * i) * _h + i * _w + _i;
                     hwoi_idx = (w * o * i) * _h + (o * i) * _w + i * _o + _i;
+                    v_o[_o] += v_hwi[hwi_idx] * v_hwoi[hwoi_idx];
+                }
+            }
+        }
+    }
+}
 
-                    if (quant_byte == 32) {
-                        v_o[_o] += (((int32_t) (v_hwi[hwi_idx] * quant_const)) * ((int32_t) (v_hwoi[hwoi_idx] * quant_const))) / quant_const_square;
-                    } else if (quant_byte == 16) {
-                        v_o[_o] += (((int16_t) (v_hwi[hwi_idx] * quant_const)) * ((int16_t) (v_hwoi[hwoi_idx] * quant_const))) / quant_const_square;
-                    } else if (quant_byte == 8) {
-                        v_o[_o] += (((int8_t) (v_hwi[hwi_idx] * quant_const)) * ((int8_t) (v_hwoi[hwoi_idx] * quant_const))) / quant_const_square;
-                    } else { // no quantization
-                        v_o[_o] += v_hwi[hwi_idx] * v_hwoi[hwoi_idx];
-                    }
+void einsum_hwi_hwoi_to_o_32(int* shape, int32_t* v_hwi, int32_t* v_hwoi, int32_t* v_o) {
+    // shape: h, w, o, i
+    int h = shape[0];
+    int w = shape[1];
+    int o = shape[2];
+    int i = shape[3];
+    int hwi_idx, hwoi_idx;
+    for (int _h = 0; _h < h; _h++) {
+        for (int _w = 0; _w < w; _w++) {
+            for (int _o = 0; _o < o; _o++) {
+                for (int _i = 0; _i < i; _i++) {
+                    hwi_idx = (w * i) * _h + i * _w + _i;
+                    hwoi_idx = (w * o * i) * _h + (o * i) * _w + i * _o + _i;
+                    v_o[_o] += v_hwi[hwi_idx] * v_hwoi[hwoi_idx];
+                }
+            }
+        }
+    }
+}
+
+void einsum_hwi_hwoi_to_o_16(int* shape, int16_t* v_hwi, int16_t* v_hwoi, int16_t* v_o) {
+    // shape: h, w, o, i
+    int h = shape[0];
+    int w = shape[1];
+    int o = shape[2];
+    int i = shape[3];
+    int hwi_idx, hwoi_idx;
+    for (int _h = 0; _h < h; _h++) {
+        for (int _w = 0; _w < w; _w++) {
+            for (int _o = 0; _o < o; _o++) {
+                for (int _i = 0; _i < i; _i++) {
+                    hwi_idx = (w * i) * _h + i * _w + _i;
+                    hwoi_idx = (w * o * i) * _h + (o * i) * _w + i * _o + _i;
+                    v_o[_o] += v_hwi[hwi_idx] * v_hwoi[hwoi_idx];
+                }
+            }
+        }
+    }
+}
+
+void einsum_hwi_hwoi_to_o_8(int* shape, int8_t* v_hwi, int8_t* v_hwoi, int8_t* v_o) {
+    // shape: h, w, o, i
+    int h = shape[0];
+    int w = shape[1];
+    int o = shape[2];
+    int i = shape[3];
+    int hwi_idx, hwoi_idx;
+    for (int _h = 0; _h < h; _h++) {
+        for (int _w = 0; _w < w; _w++) {
+            for (int _o = 0; _o < o; _o++) {
+                for (int _i = 0; _i < i; _i++) {
+                    hwi_idx = (w * i) * _h + i * _w + _i;
+                    hwoi_idx = (w * o * i) * _h + (o * i) * _w + i * _o + _i;
+                    v_o[_o] += v_hwi[hwi_idx] * v_hwoi[hwoi_idx];
                 }
             }
         }
@@ -170,13 +392,27 @@ void einsum_hwi_hwoi_to_o(int* shape, float* v_hwi, float* v_hwoi, float* v_o, i
 }
 
 
-struct Tensor conv2d(struct Tensor input, struct Tensor kernel, int quant_byte, float quant_const) {
+struct Tensor conv2d(struct Tensor input, struct Tensor kernel, int quant_byte) {
     // input.shape: (N, H, W, C=IC)
     // kernel.shape: (KH, KW, OC, IC=C)
     // output.shape: (N, H, W, OC)
-    int output_sz = input.shape[0] * input.shape[1] * input.shape[2] * kernel.shape[2] * 4;
+    int output_dim = input.shape[0] * input.shape[1] * input.shape[2] * kernel.shape[2];
     struct Tensor out;
-    out.vector = (float *) malloc(output_sz);
+
+    int output_sz;
+    if (quant_byte == 32) {
+        output_sz = output_dim * sizeof(int32_t);
+        out.v32 = (int32_t *) malloc(output_sz);
+    } else if (quant_byte == 16) {
+        output_sz = output_dim * sizeof(int16_t);
+        out.v16 = (int16_t *) malloc(output_sz);
+    } else if (quant_byte == 8) {
+        output_sz = output_dim * sizeof(int8_t);
+        out.v8 = (int8_t *) malloc(output_sz);
+    } else {
+        output_sz = output_dim * sizeof(float);
+        out.vector = (float *) malloc(output_sz);
+    }
     int shape[4] = {input.shape[0], input.shape[1], input.shape[2], kernel.shape[2]};
     memcpy(out.shape, shape, 16);
     out.sz = output_sz + 16;
@@ -192,8 +428,6 @@ struct Tensor conv2d(struct Tensor input, struct Tensor kernel, int quant_byte, 
     struct Padding pad = get_same_padding_in_tf(out.shape[1], out.shape[2], kernel.shape[0], kernel.shape[1]);
 
     int patch_dim = kernel.shape[0] * kernel.shape[1] * kernel.shape[3];
-    float *patch_hwi;  // kh * kw * ic
-    float *v_o;
 
     int start_odx;
     int oc = kernel.shape[2];
@@ -203,15 +437,38 @@ struct Tensor conv2d(struct Tensor input, struct Tensor kernel, int quant_byte, 
 
                 start_odx = o0 * _n + o1 * _h + o2 * _w;
 
-                v_o = (float *) calloc(oc, sizeof(float));
-
-                patch_hwi = get_input_patch(input, pad, _n, _h, _w, kernel.shape[0], kernel.shape[1], i0, i1, i2);
-                einsum_hwi_hwoi_to_o(kernel.shape, patch_hwi, kernel.vector, v_o, quant_byte, quant_const);
-
-                memcpy(out.vector + start_odx, v_o, oc * sizeof(float));
-
-                free(patch_hwi);
-                free(v_o);
+                if (quant_byte == 32) {
+                    int32_t *v_o = (int32_t *) calloc(oc, sizeof(int32_t));
+                    int32_t *patch_hwi = get_input_patch_32(input, pad, _n, _h, _w, kernel.shape[0], kernel.shape[1],
+                                                            i0, i1, i2);
+                    einsum_hwi_hwoi_to_o_32(kernel.shape, patch_hwi, kernel.v32, v_o);
+                    memcpy(out.v32 + start_odx, v_o, oc * sizeof(int32_t));
+                    free(patch_hwi);
+                    free(v_o);
+                } else if (quant_byte == 16) {
+                    int16_t *v_o = (int16_t *) calloc(oc, sizeof(int16_t));
+                    int16_t *patch_hwi = get_input_patch_16(input, pad, _n, _h, _w, kernel.shape[0], kernel.shape[1],
+                                                            i0, i1, i2);
+                    einsum_hwi_hwoi_to_o_16(kernel.shape, patch_hwi, kernel.v16, v_o);
+                    memcpy(out.v16 + start_odx, v_o, oc * sizeof(int16_t));
+                    free(patch_hwi);
+                    free(v_o);
+                } else if (quant_byte == 8) {
+                    int8_t *v_o = (int8_t *) calloc(oc, sizeof(int8_t));
+                    int8_t *patch_hwi = get_input_patch_8(input, pad, _n, _h, _w, kernel.shape[0], kernel.shape[1],
+                                                          i0, i1, i2);
+                    einsum_hwi_hwoi_to_o_8(kernel.shape, patch_hwi, kernel.v8, v_o);
+                    memcpy(out.v8 + start_odx, v_o, oc * sizeof(int8_t));
+                    free(patch_hwi);
+                    free(v_o);
+                } else {
+                    float *v_o = (float *) calloc(oc, sizeof(float));
+                    float *patch_hwi = get_input_patch(input, pad, _n, _h, _w, kernel.shape[0], kernel.shape[1], i0, i1, i2);
+                    einsum_hwi_hwoi_to_o(kernel.shape, patch_hwi, kernel.vector, v_o);
+                    memcpy(out.vector + start_odx, v_o, oc * sizeof(float));
+                    free(patch_hwi);
+                    free(v_o);
+                }
             }
         }
     }
@@ -224,66 +481,59 @@ int main (int argc, char* argv[]) {
     clock_t start, end;
     float elapsed_time;
 
+    clock_t start_q, end_q;
+    float elapsed_time_q = 0;
+
+    int quant_byte = (int) atoi(argv[3]);  // 32, 16, 8
+    float quant_const = 10;
+    if (quant_byte == 32) {
+        quant_const = 1000;
+    } else if (quant_byte == 16) {
+        quant_const = 1000;
+    } else if (quant_byte == 8) {
+        quant_const = 1000;
+    }
+
+    if (argc == 5 && ((float) atoi(argv[4])) > 0) {
+        quant_const = (float) atoi(argv[4]);
+    }
+
     struct Tensor tensor_in = get_tensor(argv[1]);
     struct Tensor tensor_ke = get_tensor(argv[2]);
 
     struct Tensor tensor_ot, tensor_quant_ot;
+    struct Tensor tensor_in_q, tensor_ke_q;
+
+    int tensor_sz;
+    float nrmse;
+
+    tensor_ot = conv2d(tensor_in, tensor_ke, -1);
+    tensor_sz = tensor_ot.shape[0] * tensor_ot.shape[1] * tensor_ot.shape[2] * tensor_ot.shape[3];
+
+    start_q = clock();
+    tensor_in_q = quantize(tensor_in, quant_byte, quant_const);
+    tensor_ke_q = quantize(tensor_ke, quant_byte, quant_const);
+    end_q = clock();
+    elapsed_time_q += (float) (end_q - start_q) / CLOCKS_PER_SEC;
 
     start = clock();
-    tensor_ot = conv2d(tensor_in, tensor_ke, -1, -1);
+    tensor_quant_ot = conv2d(tensor_in_q, tensor_ke_q, quant_byte);
     end = clock();
     elapsed_time = (float) (end - start) / CLOCKS_PER_SEC;
 
-    int quant_byte = (int) atoi(argv[3]);  // 32, 16, 8
-    float quant_const;
+    start_q = clock();
+    tensor_quant_ot = recover_tensor(tensor_quant_ot, quant_byte, quant_const);
+    end_q = clock();
+    elapsed_time_q += (float) (end_q - start_q) / CLOCKS_PER_SEC;
 
-    if (quant_byte > 0) {
+    write_tensor(tensor_quant_ot, "output_tensor.bin");
 
-        if (quant_byte == 32) {
-            quant_const = 1000;
-        } else if (quant_byte == 16) {
-            quant_const = 1000;
-        } else if (quant_byte == 8) {
-            quant_const = 1000;
-        }
+    nrmse = get_nrmse(tensor_quant_ot.vector, tensor_ot.vector, tensor_sz);
 
-        start = clock();
-        tensor_quant_ot = conv2d(tensor_in, tensor_ke, quant_byte, quant_const);
-        end = clock();
-        elapsed_time = (float) (end - start) / CLOCKS_PER_SEC;
-        printf("Elapsed time: %f for byte %d, const %f \n", elapsed_time, quant_byte, quant_const);
-        write_tensor(tensor_ot, "output_tensor.bin");
+    printf("For byte %d, const %f \n", quant_byte, quant_const);
+    printf("*  Elapsed time: %f \n", elapsed_time);
+    printf("* Overhead time: %f \n", elapsed_time_q);
+    printf("*         NRMSE: %f \n", nrmse);
 
-    } else {
-
-        printf("quant_byte\tquant_const\tnrmse\telapsed_time\n");
-        printf("%d\t%d\t%f\t%f\n", -1, -1, 0.0, elapsed_time);
-
-        for (int _byte = 3; _byte <= 5; _byte++) {
-
-            quant_byte = pow(2, _byte);
-
-            for (int _const = 0; _const <= 10000; _const += 200) {
-
-                quant_const = max(1, _const);
-
-                start = clock();
-                tensor_quant_ot = conv2d(tensor_in, tensor_ke, quant_byte, quant_const);
-                end = clock();
-                elapsed_time = (float) (end - start) / CLOCKS_PER_SEC;
-
-                int tensor_size = tensor_ot.shape[0] * tensor_ot.shape[1] * tensor_ot.shape[2] * tensor_ot.shape[3];
-                float nrmse = get_nrmse(tensor_quant_ot.vector, tensor_ot.vector, tensor_size);
-
-                printf("%d\t%d\t%f\t%f\n", quant_byte, (int) quant_const, nrmse, elapsed_time);
-
-                free(tensor_quant_ot.vector);
-            }
-        }
-    }
-
-    free(tensor_in.vector);
-    free(tensor_ke.vector);
-    free(tensor_ot.vector);
     return 0;
 }
