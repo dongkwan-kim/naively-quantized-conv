@@ -161,7 +161,7 @@ struct Tensor conv2d(struct Tensor input, struct Tensor kernel) {
     float *v_o;
 
     int start_odx;
-    int oc = kernel.shape[3];
+    int oc = kernel.shape[2];
     for (int _n = 0; _n < input.shape[0]; _n++) {  // N
         for (int _h = 0; _h < input.shape[1]; _h++) { // H
             for (int _w = 0; _w < input.shape[2]; _w++) { // W
