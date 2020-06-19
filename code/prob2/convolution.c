@@ -90,6 +90,10 @@ struct Tensor quantize(struct Tensor t, int quant_byte, float quant_const) {
 
 struct Tensor recover_tensor(struct Tensor tensor, int quant_byte, float quant_const) {
 
+    if (quant_byte <= 0) {
+        return tensor;
+    }
+
     int dim = tensor.shape[0] * tensor.shape[1] * tensor.shape[2] * tensor.shape[3];
     float quant_const_square = quant_const * quant_const;
 
