@@ -318,6 +318,36 @@ void dot_32(int dim, int32_t* a1d, int32_t* b1d, int32_t* c) {
     }
 }
 
+void dot_16(int dim, int16_t* a1d, int16_t* b1d, int16_t* c) {
+
+    int16_t ans = 0;
+    for (int i = 0; i < dim; i++)
+        ans += a1d[i] * b1d[i];
+
+    __m256i m_sum, m_a1d, m_b1d, res;
+
+    m_sum = _mm256_setzero_si256();
+
+    *c = 0;
+
+    int i;
+    for (i = 0; i < dim - 15; i = i + 16) {
+        m_a1d = _mm256_loadu_si256((__m256i*) &a1d[i]);
+        m_b1d = _mm256_loadu_si256((__m256i*) &b1d[i]);
+
+        res = _mm256_mullo_epi16(m_a1d, m_b1d);
+        m_sum = _mm256_add_epi16(m_sum, res);
+    }
+
+    for (; i < dim; ++i) {
+        *c += a1d[i] * b1d[i];
+    }
+
+    int16_t* m_sum_16 = (int16_t *)&m_sum;
+    for (int k = 0; k < 16; k++) {
+        *c += m_sum_16[k];
+    }
+}
 
 
 struct p_mmv_args {
@@ -330,6 +360,9 @@ struct p_mmv_args {
     int32_t* mxk_32;
     int32_t* kx1_32;
     int32_t* mx1_32;
+    int16_t* mxk_16;
+    int16_t* kx1_16;
+    int16_t* mx1_16;
 } args;
 
 
@@ -355,6 +388,17 @@ void mmv_32(int dim_m, int dim_k, int32_t* mxk, int32_t* kx1, int32_t* mx1) {
     free(row1xk);
 }
 
+void mmv_16(int dim_m, int dim_k, int16_t* mxk, int16_t* kx1, int16_t* mx1) {
+    int16_t* row1xk = (int16_t *) malloc(sizeof(int16_t) * dim_k);
+    int row_idx;
+    for (int i = 0; i < dim_m; i ++) {
+        row_idx = i * dim_k;
+        memcpy(row1xk, &mxk[row_idx], dim_k * sizeof(int16_t));
+        dot_16(dim_k, row1xk, kx1, &mx1[i]);
+    }
+    free(row1xk);
+}
+
 
 void *p_mmv(void* arguments) {
     struct p_mmv_args *args = arguments;
@@ -367,6 +411,13 @@ void *p_mmv_32(void* arguments) {
     struct p_mmv_args *args = arguments;
     int idx = args->row_idx * args->dim_k;
     mmv_32(args->dim_m, args->dim_k, &args->mxk_32[idx], args->kx1_32, &args->mx1_32[args->row_idx]);
+    free(args);
+}
+
+void *p_mmv_16(void* arguments) {
+    struct p_mmv_args *args = arguments;
+    int idx = args->row_idx * args->dim_k;
+    mmv_16(args->dim_m, args->dim_k, &args->mxk_16[idx], args->kx1_16, &args->mx1_16[args->row_idx]);
     free(args);
 }
 
@@ -437,6 +488,38 @@ void mmv_pthread_32(int num_thread, int dim_m, int dim_k, int32_t* mxk, int32_t*
     }
 }
 
+void mmv_pthread_16(int num_thread, int dim_m, int dim_k, int16_t* mxk, int16_t* kx1, int16_t* mx1) {
+
+    pthread_t tid[num_thread];
+
+    int row_sz = dim_m / num_thread;
+    struct p_mmv_args args, *_args;
+    args.dim_m = row_sz;
+    args.dim_k = dim_k;
+    args.mxk_16 = mxk;
+    args.kx1_16 = kx1;
+    args.mx1_16 = mx1;
+    args.row_idx = -1;
+
+    for (int t = 0; t < num_thread; t++) {
+        _args = (struct p_mmv_args *) malloc(sizeof(struct p_mmv_args));
+        memcpy(_args, &args, sizeof(struct p_mmv_args));
+        _args->row_idx = t * row_sz;
+        pthread_create(tid + t, NULL, p_mmv_16, (void *) _args);
+    }
+
+    if (dim_m % num_thread != 0) {
+        _args = (struct p_mmv_args *) malloc(sizeof(struct p_mmv_args));
+        memcpy(_args, &args, sizeof(struct p_mmv_args));
+        _args->row_idx = num_thread * row_sz;
+        _args->dim_m = dim_m - num_thread * row_sz;
+        pthread_create(tid + num_thread, NULL, p_mmv_16, (void *) _args);
+    }
+
+    for (int t = 0; t < num_thread; t++) {
+        pthread_join(tid[t], NULL);
+    }
+}
 
 void einsum_hwi_hwoi_to_o(int* shape, float* v_hwi, float* v_hwoi, float* v_o, int num_thread) {
     // shape: h, w, o, i
@@ -507,15 +590,26 @@ void einsum_hwi_hwoi_to_o_16(int* shape, int16_t* v_hwi, int16_t* v_hwoi, int16_
     int o = shape[2];
     int i = shape[3];
     int hwi_idx, hwoi_idx;
+
+    int16_t* v_oi;
+    int16_t* v_i1;
+
     for (int _h = 0; _h < h; _h++) {
         for (int _w = 0; _w < w; _w++) {
+
+            hwi_idx = (w * i) * _h + i * _w;
+            hwoi_idx = (w * o * i) * _h + (o * i) * _w;
+
+            v_i1 = v_hwi + hwi_idx;
+            v_oi = v_hwoi + hwoi_idx;
+
+            int16_t *tmp_o = (int16_t *) calloc(o, sizeof(int16_t));
+            mmv_pthread_16(num_thread, o, i, v_oi, v_i1, tmp_o);
             for (int _o = 0; _o < o; _o++) {
-                for (int _i = 0; _i < i; _i++) {
-                    hwi_idx = (w * i) * _h + i * _w + _i;
-                    hwoi_idx = (w * o * i) * _h + (o * i) * _w + i * _o + _i;
-                    v_o[_o] += v_hwi[hwi_idx] * v_hwoi[hwoi_idx];
-                }
+                v_o[_o] += tmp_o[_o];
             }
+            free(tmp_o);
+
         }
     }
 }
@@ -615,7 +709,7 @@ int main (int argc, char* argv[]) {
     if (quant_byte == 32) {
         quant_const = 1000;
     } else if (quant_byte == 16) {
-        quant_const = 1000;
+        quant_const = 50;
     }
 
     struct Tensor tensor_in = get_tensor(argv[1]);
@@ -647,8 +741,8 @@ int main (int argc, char* argv[]) {
     tensor_quant_ot = recover_tensor(tensor_quant_ot, quant_byte, quant_const);
     end_q = clock();
     elapsed_time_q += (float) (end_q - start_q) / CLOCKS_PER_SEC;
-    for (int i = 0; i < 5; i ++)
-        printf("%f %f \n", tensor_ot.vector[i], tensor_quant_ot.vector[i]);
+    // for (int i = 0; i < 5; i ++)
+    //    printf("%f %f \n", tensor_ot.vector[i], tensor_quant_ot.vector[i]);
 
     write_tensor(tensor_quant_ot, "output_tensor.bin");
 
