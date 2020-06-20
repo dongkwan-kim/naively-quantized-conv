@@ -491,11 +491,11 @@ int main (int argc, char* argv[]) {
     int quant_byte = (int) atoi(argv[3]);  // 32, 16, 8
     float quant_const = 10;
     if (quant_byte == 32) {
-        quant_const = 1000;
+        quant_const = 8192;
     } else if (quant_byte == 16) {
-        quant_const = 1000;
+        quant_const = 64;
     } else if (quant_byte == 8) {
-        quant_const = 1000;
+        quant_const = 8;
     }
 
     if (argc == 5 && ((float) atoi(argv[4])) > 0) {

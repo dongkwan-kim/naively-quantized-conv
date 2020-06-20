@@ -707,9 +707,9 @@ int main (int argc, char* argv[]) {
     }
 
     if (quant_byte == 32) {
-        quant_const = 1000;
+        quant_const = 8192;
     } else if (quant_byte == 16) {
-        quant_const = 50;
+        quant_const = 64;
     }
 
     struct Tensor tensor_in = get_tensor(argv[1]);
@@ -721,7 +721,7 @@ int main (int argc, char* argv[]) {
     int tensor_sz;
     float nrmse;
 
-    int num_thread = 1;
+    int num_thread = 4;
 
     tensor_ot = conv2d(tensor_in, tensor_ke, num_thread, -1);
     tensor_sz = tensor_ot.shape[0] * tensor_ot.shape[1] * tensor_ot.shape[2] * tensor_ot.shape[3];
